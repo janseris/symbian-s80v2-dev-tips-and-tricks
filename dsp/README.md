@@ -33,6 +33,45 @@ Unrelated despite the name: `Oprbridge.dll` (Opera's), `Bios.dll` (BIO messaging
   `Gwc.dll` 0x50911BF0, `Dasfgwc.dll`, `DeviceManagementServerProxy.dll`, `DeviceManagementServer.exe`
   (uid 0x101FAF8D), `RawGwc.dll` / `RawHwDevice.dll` (the RAW_NOK node); sent in round 3 (Maps 1.48).
 
+## Round 3 (Maps 1.48): the framework
+
+25 ROM images, sent whole from memory. The DLL graph (from their tables of DLLs):
+
+```
+BridgeApi  <- Balbuffers <- Balbuffermanager
+BridgeApi, Balbuffers <- Bal  (an RBusLogicalChannel on the "Hwa" LDD: DoControl / DoSvControl)
+Bal, Balbuffermanager <- Gwc  (the gateway component: a CActive-based class, 33 exports)
+Bal, Balbuffermanager <- <Codec>Gwc[TI] (RawGwc, AacDecGwc, AmrDecGwcTI, Mp3DecGwc) <- <Codec>HwDevice (MMF)
+Bal <- Dasfgwc <- ASC1510.dll (the audio stream controller)
+Bal <- DeviceManagementServer.exe; DeviceManagementServerProxy.dll (its client: z:\system\libs\DeviceManagementServer.exe)
+BridgeApi <- DspMemMapper
+```
+
+- **No names anywhere** (stripped C++), so ordinals are named by what they call. EUser's exports are
+  named from the SDK's `euser.lib` (`libords.py`: member `d1390s_<ordinal>.o` holds `__imp_<name>`);
+  EUser's export table in this ROM is at **0x500E8938** (found by matching the XIP stubs against the
+  compressed DLLs' EUSER ordinals).
+- **XIP import stubs**: `ldr ip,[pc,#4]; ldr ip,[ip]; bx ip`, the literal pointing at the slot of the
+  used DLL's **export table** (so the slot's position is the ordinal): `xan.py` names them.
+- **Bal's DoControl functions** (Nokia/TI extensions of `d32hwa.h`): Bal@1 9, Bal@6 8, Bal@25
+  0x80000000, Bal@8 0x80000003, Bal@11 0x80000005, Bal@10 0x80000006, Bal@24 0x80000008, Bal@17
+  0x80000009, Bal@13 0x8000000E, Bal@14 0x8000000F, Bal@3 0x80000010, Bal@4 0x80000011, Bal@19
+  0x80000014, Bal@5 0x80000015; DoSvControl: Bal@2 4, 5, 7; Bal@22 0x80000007, 6, 7; Bal@23 6, 7.
+  Bal@9 → BridgeApi@12, Bal@20 / 21 → BridgeApi@15, Bal@28 loads / frees the Hwa LDD and PDD.
+- **Each codec's Gwc holds its node's UUID** as a GUID struct (RawGwc: 781EB912-5631-11D6-ADBD-
+  000086553665 = RAW_NOK; AacDecGwc, AmrDecGwcTI, Mp3DecGwc likewise).
+- **Starting a node** (RawGwc@1, the clearest): create arguments in a TBuf8<32> + the UUID →
+  **Bal@9** (→ BridgeApi@12: allocate the node); the streams' attributes (size 0xC02 or 0x800,
+  timeout -1) → **Bal@21** (input 0, 1) / **Bal@20** (output 0, 1); buffers (0x1804, 0x1000 bytes)
+  → **Balbuffermanager@4**; **Gwc@11** (the buffer manager); **Bal@2** (create: DoSvControl 4, 5, 7);
+  Gwc@20 / @19 (the stream records); **Bal@22** (run: 0x80000007, 6, 7); Gwc@13; Gwc@31 with
+  60,000,000 (a 60 s timeout). `lst_RawGwc.txt` from `lst.py RawGwc`.
+
+To use a node from our own app: import libraries for Bal.dll / Gwc.dll / Balbuffermanager.dll by
+ordinal (a .def with made-up names, `dlltool`), then the RawGwc sequence with the node's UUID; for the
+JPEG decoder (1 input stream, no output stream: its output goes to a buffer mapped with DspMemMapper,
+as Dspimgc does) also its create arguments and messages (TI's IJPD, unknown here).
+
 ## The DSP side (`Z:\System\Libs\Plugins`, TI DOF "dynamic object files")
 
 Base image `Dsp_image.dof` (baseimage.out, DSP/BIOS, Apr 2005): nodes `DASFTASK_TI`, `SYNCCLOCK_TI`;
@@ -73,7 +112,10 @@ on the ARM (no CPU left, ~2x slower than Maps' own), so the DSP JPEG node isn't 
 ## Tools
 
 `rom.py` (ROM image header), `armdis.py` (capstone ARM disassembly with literal strings), `dof.py`,
-`dcd.py` (every node's properties), `unz.cpp` (decompress an E32Image). Put the files in `files/`.
+`dcd.py` (every node's properties), `unz.cpp` (decompress an E32Image), `imports.py` (a compressed
+DLL's imports by ordinal), `e32dis.py` (disassemble one, calls named), `xan.py` + `lst.py <Dll>` (the
+ROM images in `files/rom/`, calls across them named), `calls.py` / `ctl.py` (per export: what it calls,
+its DoControl numbers), `libords.py` (ordinal → name from an SDK .lib). Put the files in `files/`.
 
 ## What running our own code would take
 
