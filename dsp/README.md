@@ -72,6 +72,42 @@ ordinal (a .def with made-up names, `dlltool`), then the RawGwc sequence with th
 JPEG decoder (1 input stream, no output stream: its output goes to a buffer mapped with DspMemMapper,
 as Dspimgc does) also its create arguments and messages (TI's IJPD, unknown here).
 
+### How MMF starts the RAW node (RawHwDevice → RawGwc), read for the probe
+
+- `RawHwDevice.dll`'s ECOM table: implementation **0x101FAF3D** (NewL = its ordinal 2); its custom
+  interface uid **0x101FAF3E** returns the CRawGwc.
+- Its `CMMFHwDevice` vtable (GCC 2.9: 2 header words, then the functions), in **this** order (not the
+  7.0s header's): ~dtor, **Start**(func, flow 1..4), **Stop** (Gwc@25(1,0)), **Pause** (Gwc@15),
+  StopAndDeleteCodec, DeleteCodec (Gwc@2), **Init**(params), **CustomInterface**(uid),
+  ThisHwBufferFilled, ThisHwBufferEmptied, **SetConfig** (RawGwc@3: the sample rates 11025-96000).
+- `CRawGwc::NewL(observer, const TDesC16& name)` = RawGwc@2 (name "": `CBal::NewL("")` loads nothing
+  yet); the object has 5 vtable pointers (multiple inheritance), the observer interface 7 functions.
+- **Init's parameters are ~0x250 bytes** (Nokia's THwDeviceInitParams): the observer, per stream a
+  block with a name descriptor (the DSP side's streams are `/dbpipe` devices) at +0x0C, +0x9C,
+  +0x12C, +0x1BC, and a descriptor at +0x244. Init turns them into a **0x304-byte config** and calls
+  the CRawGwc's first virtual = **RawGwc@1** with it: 4 stream blocks of 0xB0 at +0x0C (in 0),
+  +0xBC (out 0), +0x16C (in 1), +0x21C (out 1); buffers at +0x2CC (0x1804 and 0x1000 bytes); the
+  words at +0, +4, +8 go to Bal@2 (create).
+- **Blocker:** those parameters come from DevSound's adaptation (not dumped), and RAW_NOK is the
+  audio output path (DASF, the sync clock), so starting it outside MMF would compete with DevSound for
+  the audio hardware. The JPEG decoder has no ARM-side user at all (no Gwc, no HwDevice in the ROM),
+  so its create arguments and TI's IJPD messages would have to be guessed on the phone.
+
+### Round 4 (Maps 1.49): DevSound
+
+- `MmfDevSound.dll` runs **in the app's own process** and picks a HwDevice by its uid from a table
+  (0x101FAF22, 0x101FAF26, 0x101FAF2A, **0x101FAF3D RAW**, 0x101FAF39, 0x101FAF93, 0x101FAF6B; PCM16 is
+  FourCC " P16" 0x36315020).
+- The order: `DeviceManagementServerProxy` object (0x64 bytes, its constructor, **@5** connect) →
+  **@16 reserve**(proxy, HwDevice uid, mode 1 or 2, TBuf8<16> out: 16 bytes kept at DevSound+0x1C) →
+  `REComSession::CreateImplementationL(uid, key offset 8)` → the HwDevice's **Start(2, 1)** (vtable +0x0C);
+  later Pause (+0x14), StopAndDeleteCodec / DeleteCodec (+0x18 / +0x1C), CustomInterface (+0x24),
+  the buffers (+0x28 / +0x2C); @21 release (modes 0, 3, 4, 5), @11, @13, @26.
+- DevSound **never calls the HwDevice's Init** (+0x20), so where the node's settings come from isn't
+  readable from the code: Maps 1.50's "DSP probe 2" reads them live from its own heap while a sound
+  plays.
+- `ASC1510.dll` is the audio codec chip's controller (AIC23 / LM4855), not a DSP user.
+
 ## The DSP side (`Z:\System\Libs\Plugins`, TI DOF "dynamic object files")
 
 Base image `Dsp_image.dof` (baseimage.out, DSP/BIOS, Apr 2005): nodes `DASFTASK_TI`, `SYNCCLOCK_TI`;
