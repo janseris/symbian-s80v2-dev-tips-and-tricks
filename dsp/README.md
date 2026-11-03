@@ -103,9 +103,19 @@ as Dspimgc does) also its create arguments and messages (TI's IJPD, unknown here
   `REComSession::CreateImplementationL(uid, key offset 8)` → the HwDevice's **Start(2, 1)** (vtable +0x0C);
   later Pause (+0x14), StopAndDeleteCodec / DeleteCodec (+0x18 / +0x1C), CustomInterface (+0x24),
   the buffers (+0x28 / +0x2C); @21 release (modes 0, 3, 4, 5), @11, @13, @26.
-- DevSound **never calls the HwDevice's Init** (+0x20), so where the node's settings come from isn't
-  readable from the code: Maps 1.50's "DSP probe 2" reads them live from its own heap while a sound
-  plays.
+- (Corrected: the first listings stopped at data inside the code; `xan.py` now uses capstone's
+  `skipdata`.) DevSound **does** call the HwDevice's Init (+0x20) with its own +0xF4 as the
+  parameters, after this DSP resource server sequence: @15, **@16 reserve**(uid, mode, TBuf8<16>) →
+  DevSound+0x1C, **@3**(uid, mode, 0, …, &id at DevSound+0x388), **@17** (a size) and **@18** (an
+  HBufC8 of that size: **the node's settings**, its TPtr8 kept at DevSound+0x338 = Init parameters
+  +0x244), then **@29** (play) or **@2** (record) with the id. Init's parameters for play: the
+  observer, stream D's word = 2 and name **"/mixer"** (+0x1B8, +0x1BC); for record stream C = 2,
+  **"/xabus"** (+0x128, +0x12C).
+- Live, from Maps 1.50 (DSP probe 2: a second of silence played with CMdaAudioOutputStream, the
+  objects read from our own heap): CRawGwc's create arguments `07 00001F40 1 1 1 1 1` (8000 Hz);
+  the stream attribute blocks `{1, 0xC02, 2, 0, -1, 0, 2, TBuf8<128> "/mixer"}` and
+  `{3|1, 0x1000, 4|1|2, 0, 0, 1, 0|2, "/mixer"}`, i.e. TI's STRM attributes (segment, buffer size,
+  buffers, alignment, timeout, mode, DMA channel) plus the device name.
 - `ASC1510.dll` is the audio codec chip's controller (AIC23 / LM4855), not a DSP user.
 
 ## The DSP side (`Z:\System\Libs\Plugins`, TI DOF "dynamic object files")
