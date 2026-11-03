@@ -1,0 +1,4 @@
+dsp/files/
+*.bin
+*.u
+__pycache__/
