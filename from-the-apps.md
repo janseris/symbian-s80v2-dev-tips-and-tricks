@@ -72,7 +72,8 @@ Instagram 9300 (`instagram9300/README.md`), Net Helper 9300 (`nethelper9300/READ
 **Network**
 - **Speeds measured:** USB IP passthrough: plain HTTP ~222 KB/s, TLS ~121 KB/s (Instagram 0.25; the
   phone's RNDIS + TCP, not the cable); GnuBox measured ~107 kB/s through it. Bluetooth via GnuBox
-  ~20-30 kB/s (the 8 KB default TCP window per connection).
+  ~20-30 kB/s in the apps, but the link itself carries ~34-35 kB/s whatever the TCP window: the
+  limit is the phone's Bluetooth serial path, not the 8 KB default window (see networking.md).
 - **Bluetooth:** error -6031 reaching another phone usually means a Bluetooth link to a PC (PC Suite)
   is up and blocks it (Net Helper 0.5).
 - **Java on the 9300** can't keep connections open or open sockets to 80/443 unsigned, but may call

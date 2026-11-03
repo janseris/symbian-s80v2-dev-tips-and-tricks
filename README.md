@@ -11,7 +11,9 @@ pitfalls) are in [symbian-s80-build-tools](https://github.com/janseris/symbian-s
 | File | What |
 |---|---|
 | [performance.md](performance.md) | The 8 KB data cache (measured: a miss ~265 ns, a hit ~1.5 cycles), what made a 3D renderer faster, JPEG decoding |
-| [networking.md](networking.md) | Network speeds, big uploads over GnuBox (Bluetooth): use a fresh connection for each, ~30 KB/s up |
+| [networking.md](networking.md) | Network speeds, big uploads over GnuBox (Bluetooth): use a fresh connection for each, ~30 KB/s up; what limits Bluetooth downloads (~35 kB/s, the phone's BTCOMM, not the TCP window), the best settings, small files, Bluetooth error codes, Android as the host |
+| [audio.md](audio.md) | What plays and its CPU cost (MP3 / AAC / AMR on the DSP: ~0 %), PCM streams, two players at once |
+| [api-notes.md](api-notes.md) | Small API notes: temporaries in `?:`, `ws32.lib`, partial redraws, `TInt64`, timer limits, sockets |
 | [from-the-apps.md](from-the-apps.md) | Tips the other native apps found (speed, the UI, files, the network, audio and video) |
 | [wikibooks-tips.md](wikibooks-tips.md) | From the Wikibooks Series 80 page: key scan codes and more (not all checked) |
 | [dsp/](dsp/README.md) | The C55x DSP: what's in the ROM (the TI codec nodes, the bridge, Nokia's GWC / BAL framework), the file formats, analysis scripts |
