@@ -99,10 +99,28 @@ of parallel connections and TCP window). Details: `gnubox-s80/notes/06-test-log.
   of its USB speed). With a CPU-heavy app downloading too (Maps' 3D view + a browser download), the
   phone, not the link, is the limit: both together got ~14 kB/s and the round trip reached 2.8 s.
 - **Small files are slow because of each new download's fixed costs**, not a slow start: GnuBox
-  Share sends at full speed from the first second. A new download pays the DNS lookup, the TCP
-  connect (~0.1-0.3 s over Bluetooth) and for HTTPS the TLS handshake (1.7-11 s over Bluetooth in
-  Maps' benchmark), while 20 KB takes only ~0.6 s to arrive. Keep connections open and reuse TLS
-  sessions; an app's displayed speed rises slowly only because these are counted in.
+  Share sends at full speed from the first second. NetTest 1.2's small-file test (plain HTTP from
+  the PC, 8 files each of 2 / 5 / 10 / 20 / 50 KB, median time per file on the phone):
+
+  | Connections | Per file | Overall | 2 KB | 5 KB | 10 KB | 20 KB | 50 KB |
+  |---|---|---|---|---|---|---|---|
+  | 1 | kept open | 27.7 kB/s | 125 ms | 203 | 390 | 671 | 1578 |
+  | 1 | new for each file | 14.3 kB/s | 734 ms | 812 | 1000 | 1312 | 2203 |
+  | 2 | kept open | **30.7 kB/s** | 562 ms | 656 | 453 | 1406 | 2406 |
+  | 2 | new for each file | 29.0 kB/s | 984 ms | 390 | 546 | 1484 | 2328 |
+  | 3 | kept open | 30.1 kB/s | 750 ms | 765 | 953 | 2015 | 3859 |
+
+  - **A new TCP connection costs ~0.6 s over Bluetooth** (plain HTTP; with one connection it halves
+    the throughput of small files). For HTTPS add the TLS handshake: 1.7-11 s in Maps' benchmark.
+    **Keep connections open, reuse TLS sessions.**
+  - On a kept-open connection a file takes ~0.1 s + its size at ~32 kB/s: one round trip is the
+    fixed cost.
+  - **2 connections kept open give the most in total**; they also hide most of a new connection's
+    cost (29.0 vs 30.7 kB/s). 3 connections add nothing but make each file wait longer (a 50 KB file
+    3.9 s instead of 1.6 s): for what the user waits for (the next visible tile, the page's own
+    files), fewer connections finish each item sooner.
+  - An app's displayed speed rises slowly at the start only because these fixed costs are counted
+    in.
 - **The TCP receive window:** `RSocket::SetOpt(KSoTcpRecvWinSize, KSolInetTcp, n)` before
   `Connect` works (GnuBox Share saw the phone advertise exactly 8160 / 16320 / 32640 / 65280 B).
   The default for apps that don't set it is 8 KB. The stack (`TCPIP6.PRT`) reads an ini section
