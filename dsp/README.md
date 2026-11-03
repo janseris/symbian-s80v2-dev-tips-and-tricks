@@ -116,7 +116,37 @@ as Dspimgc does) also its create arguments and messages (TI's IJPD, unknown here
   the stream attribute blocks `{1, 0xC02, 2, 0, -1, 0, 2, TBuf8<128> "/mixer"}` and
   `{3|1, 0x1000, 4|1|2, 0, 0, 1, 0|2, "/mixer"}`, i.e. TI's STRM attributes (segment, buffer size,
   buffers, alignment, timeout, mode, DMA channel) plus the device name.
+- Live, from Maps 1.51 (the real DevSound object at +0x94 = the RawHwDevice, +0xF0 = 0x101FAF3D):
+  **the node's settings come from the DSP resource server**: DMS@18 returns a **0x308-byte blob**
+  (`00000308`, then the 0x304-byte config Init hands to RawGwc@1): four stream blocks of 0xB0
+  (`{1, 0x1000, 4, 0, 0, 1, 0, "/mixer"}`, `{1, 0x1000, 1, 0, 0, 1, 0, "/mixer"}`,
+  `{1, 0x1000, 2, 0, 0, 1, 2, "/mixer"}`, ...). RawGwc then sets the in streams' buffer sizes (0xC02,
+  0x800) and timeouts (-1). Init's parameters (DevSound+0xF4) are the HwDevice observer, empty name
+  buffers, stream D's word 2 + "/mixer", and at +0x244 the TPtr8 of that blob.
+- DMS@3 (register) takes an observer object (a heap object with a vtable; the server's events are
+  delivered to it by an active object) and returns an id; DMS@29 (play) / @2 (record) use the id.
 - `ASC1510.dll` is the audio codec chip's controller (AIC23 / LM4855), not a DSP user.
+
+## Driving the DSP from our own code (Maps 1.52-1.54)
+
+**Proven (Maps 1.53, DSP probe 3):** the RAW_NOK node's whole life from our own code, no sound API:
+
+1. `DeviceManagementServerProxy` (called through its export table in ROM, **0x50924D34**): a 0x64-byte
+   object, **@1** construct, **@5** connect.
+2. **@16** reserve (uid 0x101FAF3D, mode 2, a TBuf8<16> `7F 2 3 3E8`) → 0.
+3. `REComSession::CreateImplementationL(TUid 0x101FAF3D, 8)` → the RawHwDevice (vtable 0x50937224).
+4. **@3** register (uid, mode 2, 0, an observer object, &id) → 0, id 4098 / 4099.
+5. **@17** the settings' size (776) and **@18** the settings (a TPtr8 of an HBufC8).
+6. **@29** play (id, &out) → 0.
+7. The HwDevice's **Init** (vtable +0x20) with the 0x250-byte parameters (observer, stream D = 2 +
+   "/mixer", the settings' TPtr8 at +0x244) → 0: the gateway's state 1, **the node runs**.
+8. Teardown: **DeleteCodec** (+0x1C, Gwc@2) → 0 (state 0), delete (+0x08, flag 3), **@8**
+   unregister, **@4** close. (StopAndDeleteCodec, +0x18, stopped Maps in 1.52: avoid it here.)
+
+**Next (Maps 1.54, DSP probe 4):** the JPEG decoder node through our own CBal (Bal.dll's export
+table **0x5090FFD0**): `CBal::NewL("")` @12 (a TPtrC16 in two words), allocate **@9** ({TPtrC8 create
+arguments, TUint8* UUID}), create **@2** ({pointer, cfg0, cfg1, cfg2}), delete **@23**, the CBal's
+virtual destructor (flag 3).
 
 ## The DSP side (`Z:\System\Libs\Plugins`, TI DOF "dynamic object files")
 
