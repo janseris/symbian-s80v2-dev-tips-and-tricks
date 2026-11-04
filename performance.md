@@ -1,4 +1,4 @@
-# Speed on the Nokia 9300: the data cache, what made Maps' 3D view faster, JPEG decoding
+# Speed on the Nokia 9300: the data cache, what made Maps' 3D view faster, JPEG decoding, measuring
 
 From the Maps 9300 notes (moved from `symbian-s80-build-tools/native9300/README.md`, 3 Nov 2026). Paths like `maps9300/` are the sibling repos in the same folder.
 
@@ -105,6 +105,84 @@ follows: **a round test on a wide screen wastes half its area; test the real sid
 that ~80 % of the frame is the 4-pixel span loop, which only packing u and v in one register
 (one add instead of two a pixel, ~11 % of the frame, but 16-bit halves: not the same pixels)
 would still shorten.
+
+## 6a. Maps 9300 1.59: front to back, and the geometry's cache misses
+
+A real LoD 21 frame (Prague, street level, 8,000 triangles, 320 x 200) went from 193 to 149 ms on the
+phone, 30 m up from 176 to 138 ms. Each step was tried in the ARM emulator first, on the phone's own
+dumped frame (`emuvts.py`, see 6c), then measured on the phone.
+
+**What the phone showed that the emulator didn't:**
+- **With small triangles the drawing follows the triangle count, not the pixels.** Front to back
+  cut the pixels drawn from 76 k to 27 k (30 m up) and saved ~1 ms: each triangle cost ~10 us
+  (~1,500 cycles) whatever its size (the median was 4.5 px). The work per triangle is what to cut
+  (and a triangle budget is a view distance).
+- **Hidden triangles are most of them.** Drawn nearest first, 5,500 of the 8,000 turned out wholly
+  hidden. Rejecting those early is where front to back paid (184 → 162 ms with the steps below).
+
+**Front to back, step by step (all the same pixels as each other, ~5 % different from painter's
+order: shared edges, and the order within a 1 m depth bucket):**
+1. **A bit a pixel** (40 bytes a 320 px row, 8 kB a frame) instead of span lists: a row within one
+   32-pixel word is a mask, a load, an AND and a compare. Rows' ends (16.16) are clipped in place to
+   the first run not drawn yet; more runs: the same rows drawn again in more passes, so the tuned
+   row loop stays untouched.
+2. **The usual cases in assembly, the rest in C**: one word all new / all drawn, two words, a partly
+   drawn word whose free part is one run (its ends by a **de Bruijn multiply and a 32-byte table**:
+   the ARM9 (ARMv4T) has no `CLZ`). Only rows with several gaps go to C (a few hundred a frame).
+3. **Reject before any setup**: first a triangle's **bounding box** against the bits (catches 9 of 10
+   hidden ones, no rows' ends computed), then the exact rows before the texture gradients.
+4. **Read the record only as far as needed**: the hidden test straight from the packed record in the
+   drawing loop, not unpacked, and the record laid out so that test needs only its first 16 bytes
+   (n, next, the 3 corners' x | y).
+5. A big triangle that the reciprocal table can't take got a C helper with a division instead of the
+   whole slow path, so it stays in the fast path (and is covered like the others).
+
+**The geometry (−18 % cache misses, the same frames):**
+- **Sort faces by chunk when the mesh loads** (a stable counting sort of indices, uv, shade): a chunk
+  off the screen is then skipped as a range, its faces never read (they were ~30 % of a frame's).
+  1.17 had kept the file's face order to keep the frames identical; with front to back that no
+  longer mattered.
+- **Don't write a list in one pass and read it in the next.** The cache doesn't fill on writes, so the
+  kept-triangle list, and the indices and corners it pointed back to, all missed again. Building each
+  kept triangle's record at once in the same loop (its corners still cached) saved 12.7 k misses of 98 k.
+- **On-screen first**: the corner transform's clamp and screen-side tests only in a branch for
+  corners off the screen (−12 % of its instructions, the same results).
+
+**Tried and not worth it (measured, so not repeated):**
+- **Corners renumbered in first-use order**: no change; the meshes already came that way.
+- **Half-size textures for far tiles**: −1.3 % misses at best; after front to back textures were only
+  ~10 % of the misses, and at 8,000 triangles nothing is far.
+- **Skipping groups of back faces per chunk** (normal cones): an exact offline count (Python over the
+  dump) gave an upper bound of ~2 ms for a complex change and ~150 kB of RAM.
+- **The DSP drawing the frame**: as fast as the ARM (textures in the shared SDRAM: `dsp/README.md`).
+
+**Outside the triangles (the frame's "rest"):**
+- **Copy only what changed to the screen**: a 320 px game view in a 640 px window copied the whole
+  window and refilled its sides every frame.
+- **`User::Available()` walks the heap's free cells**: not something to call every frame with 20 MB
+  of tiles in the heap; RAM changes slowly (every 250 ms is plenty).
+- **`TInt64` multiplies are library calls** (no 64-bit multiply instruction in use): a view test
+  doing 8 per tile per frame went to 32 bits with a range check (within 2.5 km nothing overflows).
+- **Free a view's caches when it closes**: 20 MB of 3D tiles held after leaving the 3D view left the
+  phone ~100 kB free and the network code failing.
+
+## 6c. Measuring on the phone
+
+- **The tick is 15.6 ms**: per-frame timings from `TTime` are whole ticks. Time 32 frames together
+  (one key) and divide; repeat each figure twice, and switch the change on and off with a key in the
+  same run (A/B, the same scene) instead of comparing installs.
+- **Measure the path the frames really take.** A `DrawNow()` loop went through the window server and
+  copied the whole view each time, while the app's frames went straight into the screen memory:
+  a different "rest".
+- **Replay a real frame on the PC**: dump the frame's input (meshes as in RAM, camera, textures),
+  run the phone's own ARM code on it in an emulator (Unicorn) with a cache model: instruction and
+  miss counts per function and per data, and a frame hash to prove a change draws the same pixels.
+  It matched the phone's counts exactly; installing and loading a city takes ~10 minutes, a replay
+  seconds.
+- **Count before building**: an upper bound from a quick offline script (how many faces a test could
+  ever skip, how many misses a smaller texture could save) ruled out several ideas in minutes.
+- **GCC 2.9 / ARMv4 bits that bit here**: a struct assignment can become a `memcpy` call (copy the few
+  fields by hand in C that has no library); `MUL rd, rm, rs` needs rd ≠ rm; no `CLZ`.
 
 ## 6b. JPEG decoding (the 3D photos, the panorama)
 
