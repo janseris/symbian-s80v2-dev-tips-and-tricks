@@ -345,6 +345,36 @@ parallel, but its SDRAM access is slow and stalls the ARM (and the LCD's refresh
 shakes). Coprocessor jobs must keep their data inside the DSP and move little: small inputs and
 outputs per message, or the DSP's DMA (untried).
 
+## 3D drawing on the DSP (dspprobe 6-15, Maps 1.59): measured, and why it doesn't pay
+
+Maps 9300's textured triangles split between the ARM and our node, every frame checked to the bit
+against the ARM's own drawing. The code: `maps9300/dsp/` (`verts2.inc`, `raster.inc`, `rows3`-`rows7.inc`,
+`prep6.inc` + `prep6asm.inc`), host tests in `dsp/test/`, probes in `maps9300/probe/` (archive/).
+
+| What | Measured |
+|---|---|
+| The DSP's clock (a `RPT` loop timed by the ARM) | ~145 MHz |
+| The instruction cache (ST3_55 CAEN) | on; code in SDRAM (0x280000) runs as fast as a copy in SARAM (+5 %) |
+| A textured pixel, texture in the DSP's RAM | 11 cycles (two independent lanes: 7) |
+| A textured pixel, texture in SDRAM (read by the CPU) | 48 cycles |
+| Per triangle in C (edges + rows set-up), cl55 -O2 | ~800 cycles; with the edges set up on the ARM (`prep6`) ~half |
+| `__mpyli` (32x32 multiply) calls | the compiler's for every `long * long`: use `_lmpyu` / `_lmpysu` pieces |
+| The ARM writing the shared (mapped) buffer | ~60 MB/s, as its own memory; reading ~38 MB/s |
+| Both at once, the DSP reading SDRAM non-stop | the ARM's work ~2x slower (one memory) |
+
+Synthetic scenes (one 128 x 128 texture in the DSP's RAM): with ~20-40 px triangles the split won ~1.7x
+(ARM 49 ms alone; ARM set-up 29 ms in parallel with the DSP's 28 ms). A **real** frame (Maps' dump of
+Prague's Old Town, LoD 21, 320 x 200: 8,000 triangles, half of them 4.5 px or smaller, 16-30
+textures, 2-3 MB) doesn't fit that: the textures can't be in the DSP's RAM, so 48 cycles a pixel, and
+the DSP took 130 ms against the ARM's 135 ms in the probe (Maps' own drawing: 92 ms), and with both
+running the ARM's share went from 94 to 195 ms. So the 3D view stays on the ARM; the DSP is for work
+that streams through its own RAM by DMA with no random reads of SDRAM (a video's YUV to RGB, say).
+
+Pitfalls met: our node's data must be `.text` only (no `.bss`); a DSP read of an unmapped address
+(a record with a garbage texture address: the frame was DMA'd over the records) restarted the
+phone; `C:\System\Temp` is emptied when the phone starts (a probe's progress file there is gone after a
+crash: `C:\Data\...`); a probe's lines reach Maps' log only when it ends.
+
 ## Formats (as found)
 
 - **ROM images (XIP)** read as files: `TRomImageHeader` (0x64 bytes) then the code at `iCodeAddress`;
