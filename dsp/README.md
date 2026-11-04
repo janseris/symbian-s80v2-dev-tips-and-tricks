@@ -315,6 +315,31 @@ word at a time through the traffic controller), not the code, and every such wor
 and the LCD's refresh. Untried: the DSP's DMA (ACPY2 / DMAN, as the video and JPEG nodes use it),
 which may move bursts at a better rate.
 
+**dspprobe 5: the DSP's DMA works, ~5-7x the CPU's SDRAM rate.** As the video and JPEG nodes do,
+with the base image's XDAIS DMA (no TI libraries of ours): `DMAN_init()`, `ACPY2_init()`, then
+`DMAN_addAlg(alg, fxns)`: `fxns` an IDMA2_Fxns {implementationId, dmaChangeChannels,
+dmaGetChannelCnt, dmaGetChannels, dmaInit} (pointers, 2 words each), `alg` a struct whose first
+word points to a struct starting with the same implementationId (DMAN asserts it). It asks
+`dmaGetChannelCnt()` (1), `dmaGetChannels(alg, recs)` (records of 4 words {handle, queueId};
+queue 0 as the MPEG-4 decoder uses 0-2), allocates, and gives the channel handle through
+`dmaInit(alg, recs)` (return 0). Then `ACPY2_configure(handle, int params[7])` = {0 (1D->1D),
+element size (1 16-bit, 2 32-bit), frames 1, 0, 0, 0, 0}, `ACPY2_start(handle, src, dst, count)`
+with **byte** addresses as longs (a DARAM pointer x2; DspMemMapper's address as it is) and the
+element count, `ACPY2_wait(handle)`. At the end `DMAN_removeAlg(alg, fxns)`, `ACPY2_exit()`,
+`DMAN_exit()`. Our functions' addresses need coff2dof's expression relocations (TI's RE_PUSH etc.,
+as the ROM nodes have them).
+
+| 8 KB by DMA (16- or 32-bit elements alike) | time | rate | the CPU's |
+|---|---|---|---|
+| DARAM -> SARAM | 35 us | 232 MB/s | 305 MB/s |
+| SDRAM -> DARAM | 183 us | 44.8 MB/s | 9.0 |
+| DARAM -> SDRAM | 95 us | 85.9 MB/s | 12.8 |
+| the ARM's 320x200 fills while the DMA reads SDRAM nonstop | 2.3x slower | | 4.7x at 1/5 the data |
+| ... while it writes SDRAM nonstop | 4.7x slower | | 2.7x at 1/7 the data |
+
+So a 320x200 16-bit picture (128 KB) goes out in ~1.5 ms, 1000 vertices (6 KB) in ~0.13 ms: the
+DSP can work on its own RAM and exchange whole buffers with the ARM each frame.
+
 So: the DSP is ~3x the ARM at arithmetic and as fast at pixels from its own RAM, runs in
 parallel, but its SDRAM access is slow and stalls the ARM (and the LCD's refresh: the picture
 shakes). Coprocessor jobs must keep their data inside the DSP and move little: small inputs and
