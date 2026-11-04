@@ -174,6 +174,152 @@ Dynamic nodes (DCD properties: type 02 = socket node with streams, 01 = message/
 All built 29 Apr 2005 (dd-g02). Measured (Maps 1.33): the phone's ICL JPEG decoder (0x101FF555) runs
 on the ARM (no CPU left, ~2x slower than Maps' own), so the DSP JPEG node isn't what ICL uses.
 
+## Probes without installing (Maps 1.58) and what they measured
+
+Maps 1.58 loads a probe DLL from the PC (`maps9300/probe/`, `build_probe.sh`) and runs it in a
+thread: no install per test (Symbian 7.0s loads a DLL from any path).
+
+**dspprobe 1:** the JPEG decoder node is created when its input stream 0 is connected first
+(Bal@21: kind 1, `"/dbpipe"`, 0x1000 x 2, timeout -1) and runs (@22) and deletes (@23) cleanly.
+
+**dspprobe 2** (ARM at ~150 MHz, one repetition each):
+
+| What | Time |
+|---|---|
+| transform 1000 vertices, 32-bit (9 mul) | 0.55 ms |
+| the same with 64x32-bit products (`long long` x `int`: umull + 2 mla) | 4.3 ms (a plain 32x32->64 is one smull) |
+| project 1000 vertices (2 divides each) | 1.3 ms |
+| fill 640x200 16-bit | 4.0 ms (~64 MB/s written) |
+| z-buffered flat span 320x200 | 9.0 ms |
+| affine textured span 320x200 | 12.7 ms |
+| copy 256 KB | 10.3 ms (~25 MB/s) |
+| a call into the DSP driver (the node's attributes, Bal@8) | 17 us |
+| DspMemMapper: reserve 64 KB of DSP space, map our buffer | 0 / < 1 tick; DSP address 0x360000 |
+| ARM cache flush of 64 KB (DspMemMapper@2 -> BridgeApi@33) | 165 us |
+
+So the vertex work is cheap on the ARM; a frame's cost is the pixels (memory bound). The DSP
+could only help by drawing part of the pixels in parallel (its internal RAM, DMA out), which
+needs our own node.
+
+The DSP calls (found for the probes): Bal@19 PutMessage and Bal@5 GetMessage take a TDes8 of
+12 bytes `{cmd, arg1, arg2}`; Bal@11 registers for notification; Bal@8 the node's attributes
+(0x10C bytes); Bal@1 the processor's info; Bal@7 the processor (CBal+4), which
+`DspMemMapper::NewL(processor, entries)` (@6) takes; @7 reserve `{index, size}`, @5 map
+`{ARM address, size, attributes, index}, remap`, @3 the DSP address, @2 flush `(address, size)`,
+@8 unmap, @1 unreserve. DspMemMapper's export table: 0x50911BAC.
+
+## Our own DSP code: the compiler
+
+TI's C5500 code generation tools 4.4.1 (`ti_cgt_c5500_4.4.1_setup_linux_x86.bin`, from TI's
+download archive, behind an export self-certification; don't commit it) install with
+`--mode silent --prefix <dir>` on x86-64 Linux with `libc6:i386`. Its tools are static 32-bit binaries; where 32-bit programs can't run (Cowork's Linux VM: "Bad system call") they run through `qemu-i386-static` (user mode, no root): `setup_cgt55.sh <the installed tree, tar'ed> [qemu-user-static .deb]` gives each tool a folder with wrappers for the others (the drivers `cl55` and `masm55` start their siblings from their own folder). `cl55 -v5510
+--memory_model=large -O2 -c` gives TI-COFF (large model, c55_std calls, R_REL24 relocations to
+`_NODE_getMsg` etc.): the same relocations, with the same type numbers, the ROM's DOF nodes carry.
+
+## Our own node: COFF -> DOF, registration, the node API (dspprobe 3: it runs)
+
+**The DOF format exactly** (`dofw.py` reads and writes it; all 21 ROM nodes come out byte for byte
+the same). Linux's `drivers/staging/tidspbridge/dynload/doff.h` and `cload.c` (v3.4) have the
+structures and the loader's checks:
+
+- Header 36 B: string table size, entry, `0x00010203`, the string table's size up to the last
+  section name, then u16s: symbols, the longest string (with its NUL, not the file name),
+  sections, sections to allocate, DOFF version 0, target 0x9C (C55x); flags u16 0x12E0 (big-endian
+  target), entry section s16; a checksum word: the 9 words sum to 0xFFFFFFFF.
+- Verify record 20 B: time, then ~sum of the section headers, of the string table, of the
+  symbols, and a last word that makes the record sum to 0xFFFFFFFF.
+- String table: the file name, the section names, the symbol names.
+- Section headers 28 B: name offset, run and load address (`.text` at 0x100 in TI's files),
+  size (bytes, data sections too), page, flags (bits 0-3 type, 0x10 allocate, 0x20 download,
+  bits 8-11 log2 alignment: `.text` 0x230, `.const` 0x231, the bridge's sections 0x101), the first
+  packet's file offset (0 for an empty section), packets.
+- Symbols 12 B: name offset (-1: none), value (load address), section (1-based; 0 undefined),
+  class (2 external, 3 static: a section's own symbol for relocations against it).
+- Packets: {relocations, size, checksum} + data (up to 1024 B, padded to 4) + relocations 12 B
+  {offset in the packet, symbol, disp u16, type u16}: TI-COFF's relocation types as they are
+  (5 = R_REL24 for `CALL`, 124 = R_LD3_REL23 for a data address in words). The whole packet
+  sums to 0xFFFFFFFF.
+- The bridge's sections (UTF-16BE, not loaded): `.dspbridge_symbols` (the RMS/SHM symbols, then
+  the node's three functions), `.vers`, `.dcd_register` (`UUID:0,`, 0 = a node), and `.<UUID>`
+  with the node's DCD properties: `1024,UUID,NAME,01H(task),00H,1024,0200H,080H,0c00H,05H,03H,
+  03e8H,064H,0aH,<priority>,<stack>,<system stack>,00H,<message depth>,<inputs>,<outputs>,
+  0ffffffffH,NAME_create,NAME_execute,NAME_delete,00H,08000H,iAlgName,1,0ff3f3f00H,0ff3f3f82H,`.
+
+`coff2dof.py in.obj out.dll55l --uuid ... --name ...` builds one from cl55's object (.text only
+for now: no data sections, no relocations against our own sections). Placed by hand at a made-up
+address with the base image's symbols, the relocated calls disassemble (dis55) to
+`CALL #0x2b55f8` = `_NODE_getMsg` etc.
+
+**Registering a node** (no ROM code does it for the plugins we know of; BridgeApi has it):
+`Bal@16(CBal*, const TUint8 uuid[16], TInt type, const TDesC16& file)` = `BridgeApi@14` on the
+CBal's manager (+0x24) = DCD_RegisterObject: it opens the file, then the driver's DCD (DoSvControl
+0x4000001E + 2) keeps UUID -> file. `BridgeApi@16(manager, uuid, type)` unregisters. The CBal has
+to be attached first: its internal 0x5090FB68 (which Bal@9 calls: the drivers, BridgeApi@13 the
+processor, BridgeApi@5 the manager). The UUID bytes as a GUID (data1..3 little-endian); the
+bridge finds the properties in the section `.` + `%08X_%04X_%04X_%02X%02X_%02X...` uppercased.
+`BridgeApi@8`/`@9`: the node / processor enumerations; `@7(processor, file, 0)`: load a base image
+(it registers that file's `.dcd_register` and resets the DSP: not for us).
+
+**The node API on the DSP** (from Prodtest's code through dis55, which disassembles it exactly
+once wrapped in a COFF):
+`RMS_WORD NAME_create(Int argLength, Char* argData, Int numIn, RMS_WORD* inDef, Int numOut,
+RMS_WORD* outDef, NODE_EnvPtr node)`, `RMS_WORD NAME_execute(NODE_EnvPtr)`,
+`RMS_WORD NAME_delete(NODE_EnvPtr)`, all returning RMS_EOK = 0x8000 (32-bit, in AC0); the
+node's context pointer at `node + 12` words. `Bool NODE_getMsg(node, RMS_DSPMSG*, Uns timeout)`,
+`NODE_putMsg(node, NULL /* to the GPP */, RMS_DSPMSG*, Uns timeout)`, timeout 0xFFFF = forever,
+`RMS_DSPMSG` = 3 x 32 bits {cmd, arg1, arg2}; cmd 0x80000000 = RMS_EXIT (end execute).
+`MEM_valloc(segid, size, align, value)` with `SARAM_HEAP` / `DARAM_HEAP` / `EXT_HEAP` from the base
+image. The base image exports 1485 symbols (`_CLK_getltime`, `_memcpy`, `_HWI_disable` ...).
+
+**On the ARM side**: `Bal@19(CBal*, TDes8* 12 bytes)` puts a message, `Bal@5(CBal*, TDes8*)` gets
+one (GWC waits for Bal@11's notification first).
+
+**Registration needs two entries**: the UUID as a node (type 0: the DCD properties) and as a
+library (type 2) to the same file: allocating looks the code up as a create library (3), then a
+library (2) (BridgeApi 0x507C4F9C), else -6. Don't put RMS_EXIT (0x80000000) with Bal@19 yourself
+(it hung); delete (Bal@23) ends the node.
+
+**dspprobe 3 (Maps 1.58, 2026-11-04): our code runs on the DSP.** Plain C (cl55 -O2, `volatile`
+loops, no intrinsics, no DMA):
+
+| What | DSP | ARM |
+|---|---|---|
+| a message round trip (put + get) | 189 us | |
+| 3x3 Q14 transform, vertices on the DSP's stack | 171 ns a vertex | 549 ns |
+| fill SARAM (volatile loop) | 15 words/us (slow C: to redo) | |
+| read our mapped buffer (SDRAM) | 5.5 MB/s | |
+| write it | 11.3 MB/s, words in ARM order (no swapping needed) | ~64 MB/s fill |
+| transform 8192 vertices in our buffer (+ flushes, round trip) | 1192 ns a vertex | 549 ns |
+| textured pixels 160x100, texture + picture in SDRAM | 533 ns a pixel | 198 ns |
+| texture in SARAM, picture in SDRAM | 213 ns | |
+| texture and picture in SARAM | 144 ns | |
+| the ARM filling 320x200 x20 while the DSP draws into SDRAM | 3x slower (47 -> 141 ms); the screen shook | |
+| the same while the DSP works in SARAM only | no change (47 ms) | |
+
+**dspprobe 4: the same written for speed** (no `volatile`: cl55 makes `RPT`/`RPTBLOCAL` loops
+and `MACK`s), buffers of 4096 words from `SARAM_HEAP` / `DARAM_HEAP`:
+
+| What | DSP | before | ARM |
+|---|---|---|---|
+| fill / copy in SARAM or DARAM | ~150 words/us (1 word a cycle: the DSP at ~150 MHz) | 15 | |
+| 3x3 Q14 transform, DARAM | 163 ns a vertex | 171 | 549 |
+| textured pixels, texture DARAM, picture SARAM | 102 ns a pixel | 144 | 198 |
+| SDRAM -> DARAM, 8 KB block copies | 9.0 MB/s | 5.5 | |
+| DARAM -> SDRAM | 12.8 MB/s | 11.3 | ~64 (fill) |
+| the ARM's 320x200 fills while the DSP reads SDRAM | 4.7x slower | | |
+| ... while it writes SDRAM | 2.7x slower (the screen shakes) | | |
+| ... while it works in DARAM | no slower | | |
+
+The DSP's own work got faster; its SDRAM traffic didn't: the limit is the path to the SDRAM (one
+word at a time through the traffic controller), not the code, and every such word stalls the ARM
+and the LCD's refresh. Untried: the DSP's DMA (ACPY2 / DMAN, as the video and JPEG nodes use it),
+which may move bursts at a better rate.
+
+So: the DSP is ~3x the ARM at arithmetic and as fast at pixels from its own RAM, runs in
+parallel, but its SDRAM access is slow and stalls the ARM (and the LCD's refresh: the picture
+shakes). Coprocessor jobs must keep their data inside the DSP and move little: small inputs and
+outputs per message, or the DSP's DMA (untried).
+
 ## Formats (as found)
 
 - **ROM images (XIP)** read as files: `TRomImageHeader` (0x64 bytes) then the code at `iCodeAddress`;
@@ -192,10 +338,12 @@ on the ARM (no CPU left, ~2x slower than Maps' own), so the DSP JPEG node isn't 
 DLL's imports by ordinal), `e32dis.py` (disassemble one, calls named), `xan.py` + `lst.py <Dll>` (the
 ROM images in `files/rom/`, calls across them named), `calls.py` / `ctl.py` (per export: what it calls,
 its DoControl numbers), `libords.py` (ordinal → name from an SDK .lib). Put the files in `files/`.
+For our own nodes: `setup_cgt55.sh` (TI's compiler through qemu-i386), `coff.py` (TI-COFF reader),
+`dofw.py` (DOF reader / writer), `coff2dof.py` (an object -> a node DOF).
 
-## What running our own code would take
+## What running our own code takes
 
-A C55x compiler (TI's C5500 code generation tools), DSP/BIOS Bridge's DSP-side libraries to build a
-dynamic node (DOF), and the ARM-side calls (from the 1.47 round: BAL / GWC / BridgeApi). Using an
-existing node (e.g. the JPEG decoder for map tiles, in parallel with the ARM) needs only the ARM side
-and the node's message protocol.
+TI's C5500 code generation tools (free), `coff2dof.py`, and the ARM-side calls above: no TI
+DSP-side libraries are needed, the loader links the node against the phone's base image. A
+node without data sections runs today (dspprobe 3's echo node); data sections need the
+relocations against our own sections (a partial link, or adjusting the addends).
