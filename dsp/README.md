@@ -375,6 +375,72 @@ Pitfalls met: our node's data must be `.text` only (no `.bss`); a DSP read of an
 phone; `C:\System\Temp` is emptied when the phone starts (a probe's progress file there is gone after a
 crash: `C:\Data\...`); a probe's lines reach Maps' log only when it ends.
 
+## The 3D geometry on the DSP (dspprobe 16-17e, Maps 1.59)
+
+The other half of Maps' 3D frame: the corners projected (`r3_verts`), the triangles kept (on the screen,
+facing us) and their records built, ~64 ms of the ARM's ~137 ms frame at street level. On the DSP it
+streams: the tiles' arrays in by DMA, records out by DMA, nothing read at random from SDRAM. The idea:
+a pipeline, the DSP doing frame N+1's geometry while the ARM draws frame N.
+
+| What (Old Town LoD 21 dump: 22 tiles, 31,061 corners, 42,411 faces) | Measured |
+|---|---|
+| DMA traffic like the DSP's, against the ARM drawing (dspprobe 16) | the ARM +14 % at 27 % of the time, +29 % at 54 %, +55 % non-stop |
+| DMA rates | 44.8 MB/s into the DSP, 85.9 MB/s out |
+| The ARM (Maps' assembly) | 68 ms (corners 34) |
+| The DSP in C, cl55 -O2 (dspprobe 17) | 126 ms (corners 79); the projection in 40-bit accumulators (17d) 116 ms |
+| The DSP in assembly (17e): corners (verts4b) | 22.4 ms (67.5 in C); 19.6 with the next block's DMA overlapped |
+| ... the faces and records (faces4) | 34.7 ms (47.7 in C); 28.6 overlapped; 18.6 with the uv left to the ARM |
+| A frame's geometry, all of it in assembly, overlapped, uv on the ARM | 38.3 ms (C 115 ms; the ARM 68 ms) |
+| The DSP's frame and the ARM's own geometry at once | 76.4 ms a pair (the ARM alone 67.7): the DSP's work hidden, the ARM ~13 % slower |
+| The ARM filling the records' uv from the mapped buffer | 14.9 ms (8000 records: slow, the mapped memory) |
+| DspMemMapper at once | 8 MB maps (DSP 0x360000); 16 MB: reserve -6 (KErrArgument) |
+| Self-test (8192 random corners) and the frame's 8000 records | 0 differences in every variant |
+
+C on the C55x is slow here for reasons the compiler can't help: `int` is 16 bits (every 32-bit
+product a call or a `_lmpy*` intrinsic in pieces), each `if` a branch costing 5 cycles even when not
+taken, and status-bit juggling (FRCT, M40) around its 17-bit multiplies. In assembly a corner is ~75
+instructions with no branch (conditional execution instead), a rejected face ~20.
+
+### Hand assembly for the C55x without a simulator
+
+TI's C55x simulator (SPRU599D) comes only inside older Code Composer Studio releases for Windows; TI's
+forum says the Linux CCS 5 never had it. What we did instead (`maps9300/dsp/`):
+
+- **The assembler** (cl55 through qemu) catches syntax, illegal parallel pairs and the silicon
+  exceptions: assemble the file alone with `--silicon_core_1_0 ... _2_2` and without the compiler's
+  `.noremark` lines to see them.
+- **A text-level interpreter** (`dsp/test/sim55.py`) of just the instructions used, written from
+  SPRU374G's descriptions, run against the C on the host (`v4test.py`, `f4test.py`), with mutation
+  checks that it does catch a wrong shift or condition; parallel pairs are executed in both orders and
+  must agree (they mustn't depend on each other).
+- **On the phone**: a self-test command (assembly against C on random inputs, the first difference
+  reported word by word), then the real frame's records against the ARM's.
+
+What we learned on the way (SPRU374G, SPRU371F):
+
+- Calling convention (cl55 4.4, large model): data pointers in XAR0, XAR1, ... XAR4 in order, 16-bit
+  ints in T0, T1, longs in AC0-AC2; return in T0 (int) or AC0 (long); save T2, T3, XAR5-XAR7. The C
+  environment has M40 = 0, FRCT = 0, SATD = 0, SXMD = 1, CPL = 1, ARMS = 1: set M40 for 40-bit
+  intermediates and clear it on the way out. Copy the compiler's prologue: it puts two NOPs after the
+  first `PSHBOTH` (silicon exception CPU_7).
+- Assembly in the node: `asm("...")` lines in the C file (our `build_dsp.sh` makes them from a `.s55`
+  file), since `coff2dof.py` takes one object. No data: constants as code.
+- Multiplies are 17 x 17 bits with a "32-bit result": an accumulator operand is its bits 32-16, so a
+  17-bit value goes in as `v << 16`, and `(v * 2^14 + r) << 2` already has `v` in bits 32-16 (no
+  separate floor). An unsigned 16-bit value also fits as a 17-bit operand. Keep every product under
+  2^31.
+- Branches: `BCC` takes 5 cycles not taken, 6 taken; `B` 6. `XCCPART cond` before an instruction
+  makes it conditional for 1 cycle (a store's condition is read in the R phase, a register op's in X;
+  pointer post-modifications happen anyway). `RPTB` loops cost nothing; a branch out ends them.
+- ARMS = 1 (the compiler's mode): offsets `*ARn(short(#1..7))` and the index `*ARn(T0)` only (no T1);
+  a 16-bit offset `*ARn(#k)` can't be in a parallel pair; two memory operands in a pair must be
+  Xmem/Ymem modes (`*ARn`, `*ARn+`, `*ARn-`, ...), no offsets.
+- Writing an AR in the X phase and addressing with it (AD phase) needs ~4 instructions between them or
+  the pipeline stalls (it's protected: slower, not wrong).
+- Rev 2 cores do address arithmetic in 16 bits: a buffer mustn't cross a 64K-word page (checked
+  before calling the assembly, which then falls back to C).
+- `dbl(Lmem)`: the high word at the even address.
+
 ## Formats (as found)
 
 - **ROM images (XIP)** read as files: `TRomImageHeader` (0x64 bytes) then the code at `iCodeAddress`;
