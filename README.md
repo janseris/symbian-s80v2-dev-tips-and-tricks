@@ -14,6 +14,7 @@ pitfalls) are in [symbian-s80-build-tools](https://github.com/janseris/symbian-s
 | [networking.md](networking.md) | Network speeds, big uploads over GnuBox (Bluetooth): use a fresh connection for each, ~30 KB/s up; what limits Bluetooth downloads (~35 kB/s, the phone's BTCOMM, not the TCP window), the best settings, small files, Bluetooth error codes, Android as the host |
 | [audio.md](audio.md) | What plays and its CPU cost (MP3 / AAC / AMR on the DSP: ~0 %), PCM streams, two players at once |
 | [files-and-drives.md](files-and-drives.md) | The drives (C: phone, D: the memory card, an extra E:, Z: ROM), finding the card by `KDriveAttRemovable`, saving to the user's folder (`CknEnv::GetDefaultPath`, "My files"), `\System\` conventions, failed downloads' parts, lost clusters |
+| [memory.md](memory.md) | The RAM: 64 MB chip, 47 MB managed, 18 MB of it the ROM copy, ~25 MB free at most for an app; what an app holds (heap, the stack chunk, bitmaps in the bitmap server) and how to measure it; JavaScript's and CSS's costs |
 | [api-notes.md](api-notes.md) | Small API notes: temporaries in `?:`, `ws32.lib`, partial redraws, `TInt64`, timer limits, sockets |
 | [from-the-apps.md](from-the-apps.md) | Tips the other native apps found (speed, the UI, files, the network, audio and video) |
 | [wikibooks-tips.md](wikibooks-tips.md) | From the Wikibooks Series 80 page: key scan codes and more (not all checked) |

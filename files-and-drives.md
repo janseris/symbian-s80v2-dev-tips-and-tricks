@@ -13,7 +13,7 @@ what is only the SDK's word is marked.
 | F:, G: | Listed, `EMediaNotPresent`, `Volume()` -18 (KErrNotReady). | |
 | Z: | ROM (`EMediaRom`; rom, internal; write protected), name "RomDrive", size 0. | |
 
-**RAM** (HAL, the same phone): `EMemoryRAM` 47 104 KB, `EMemoryROM` 18 432 KB, page 4096 B. So of
+**RAM** (HAL, the same phone; more in [memory.md](memory.md)): `EMemoryRAM` 47 104 KB, `EMemoryROM` 18 432 KB, page 4096 B. So of
 the 64 MB SDRAM chip, 18 MB holds the ROM: the system code lives in NAND, which can't run code,
 so it is copied into RAM at start-up. That leaves 46-47 MB, of which the system's servers take
 ~21 MB: **~25 MB free at most for apps**, matching what the apps measured (and TaskSpy's "46 MB,
