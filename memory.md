@@ -10,7 +10,7 @@ E: among them) are in [files-and-drives.md](files-and-drives.md).
 | SDRAM chip | 65 536 | Nokia's specs |
 | `HAL::Get(HALData::EMemoryRAM)` | 47 104 | the RAM the OS manages |
 | `HAL::Get(HALData::EMemoryROM)` | 18 432 | the ROM image (Z:), copied from NAND into RAM at boot: NAND can't run code in place, and Symbian 7.0s has no demand paging |
-| `EMemoryPageSize` | 4 bytes x 1024 | 4 KB pages |
+| `EMemoryPageSize` | 4 (4 096 bytes) | the memory page |
 | Free when an app starts, nothing else open (`EMemoryRAMFree`) | **25 140 - 27 164** | Browser 9300's log, three starts |
 | The system's servers and the rest | ~20 000 | 47 104 less the free RAM |
 
