@@ -5,12 +5,36 @@ what is only the SDK's word is marked.
 
 ## The drives
 
-| Drive | What | Size (this phone) |
+| Drive | What (`RFs::Drive`: media type; drive / media attributes) | Size (this phone) |
 |---|---|---|
-| C: | The phone's flash (128 MB NAND, 80 MB for the user). File manager: "Communicator". | 79.8 MB |
-| D: | **The memory card** (MMC). File manager: "Memory card". | 122.1 MB (a 128 MB card) |
-| E: | Not in Nokia's documentation, and the File manager can't open it ("Show system folder" in its settings shows only `C:\System`). The browser could write ~25 MB to it before "disk full" (-26), and a list that left out only RAM and ROM drives left it out, so it is most likely a RAM drive. Whether a restart empties it, and what made it, isn't checked. | 25.9 MB |
-| Z: | ROM: the system, read only. | |
+| C: | The phone's flash (128 MB NAND, 80 MB for the user). File manager: "Communicator". `EMediaFlash`; local, internal; formattable. | 81 742 KB |
+| D: | **The memory card** (MMC). File manager: "Memory card". `EMediaHardDisk`; local, **removable**; formattable, lockable. | 125 050 KB (a 128 MB card) |
+| E: | **A RAM drive.** Not in Nokia's documentation; the File manager can't open it ("Show system folder" in its settings shows only `C:\System`). `EMediaRam`; local, internal; **variable size**, formattable. Its free space is the phone's free RAM, and every byte stored on it is RAM taken from all apps. | grows with what is on it |
+| F:, G: | Listed, `EMediaNotPresent`, `Volume()` -18 (KErrNotReady). | |
+| Z: | ROM (`EMediaRom`; rom, internal; write protected), name "RomDrive", size 0. | |
+
+**RAM** (HAL, the same phone): `EMemoryRAM` 47 104 KB, `EMemoryROM` 18 432 KB, page 4096 B. So of
+the 64 MB SDRAM chip, 18 MB holds the ROM: the system code lives in NAND, which can't run code,
+so it is copied into RAM at start-up. That leaves 46-47 MB, of which the system's servers take
+~21 MB: **~25 MB free at most for apps**, matching what the apps measured (and TaskSpy's "46 MB,
+~20 MB free at boot" in reviews).
+
+Measured with Browser 9300's "Drives and RAM test" (0.67, `about:drivetest?write`: 2 MB written,
+read and deleted; the free RAM and the drive's free space before and after):
+
+| | Write 2 MB | Read 2 MB | Took |
+|---|---|---|---|
+| D: (MMC) | 4515 ms (~450 KB/s) | 2520 ms (~810 KB/s) | the card's space, no RAM |
+| E: (RAM) | ~8.7 MB/s (1600 KB in 180 ms, then full) | ~15 MB/s | RAM, byte for byte |
+
+- **A file left on E: eats the RAM of every app.** Browser 9300 before 0.63 saved "to the memory
+  card" on E:; a failed 24 MB download stayed there, and the phone had **1.6 MB of free RAM** left
+  (the RAM drive "size" 25 187 KB = 23.5 MB stored + the 1.6 MB free). Never write to E: unless
+  you delete it again, and never offer it as a place to save.
+- **E: as a cache:** it is ~10x faster to write and ~20x faster to read than the MMC and survives
+  the app's exit (not a power-off), but it costs the same RAM as keeping the data in the app.
+  Worth it only for data several apps or several runs reuse; not for textures one app loads into
+  its own memory anyway.
 
 - **Never pick the memory card by its letter.** Browser 9300 used E: as "the memory card" up to 0.62.
   On this phone that is the 26 MB extra drive, so downloads "to the card" filled it and failed at
