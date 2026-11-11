@@ -9,7 +9,7 @@ what is only the SDK's word is marked.
 |---|---|---|
 | C: | The phone's flash (128 MB NAND, 80 MB for the user). File manager: "Communicator". | 79.8 MB |
 | D: | **The memory card** (MMC). File manager: "Memory card". | 122.1 MB (a 128 MB card) |
-| E: | Not in Nokia's documentation. The browser could write ~25 MB to it before "disk full" (-26), and a list that left out only RAM and ROM drives left it out, so it is most likely a RAM drive. Whether a restart empties it, and what made it, isn't checked. | 25.9 MB |
+| E: | Not in Nokia's documentation, and the File manager can't open it ("Show system folder" in its settings shows only `C:\System`). The browser could write ~25 MB to it before "disk full" (-26), and a list that left out only RAM and ROM drives left it out, so it is most likely a RAM drive. Whether a restart empties it, and what made it, isn't checked. | 25.9 MB |
 | Z: | ROM: the system, read only. | |
 
 - **Never pick the memory card by its letter.** Browser 9300 used E: as "the memory card" up to 0.62.
@@ -41,8 +41,8 @@ what is only the SDK's word is marked.
   isn't on S80.)
 - **Don't put user-visible files in `\System\`.** Browser 9300 used `C:\System\Temp\` for
   downloaded installers from 0.1 to 0.63, its own choice with no convention behind it. Files there
-  are hidden from the File manager until the user enables hidden folders, and they use phone memory
-  without the user knowing. A `.sis` can be installed from any folder (`RApaLsSession::StartDocument`).
+  are not shown in the File manager unless "Show system folder" is turned on in its settings, and
+  they use phone memory without the user knowing. A `.sis` can be installed from any folder (`RApaLsSession::StartDocument`).
 - **Keep out of other apps' and the system's files.** A tool that counts or lists files should not
   enter `\System\` at all. `CDirScan` walks into every folder, so walk with `RFs::GetDir()` and a
   queue of folders instead, and skip `System` at the root. Only delete files your app created:
