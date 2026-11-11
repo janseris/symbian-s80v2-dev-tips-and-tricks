@@ -84,4 +84,7 @@ read and deleted; the free RAM and the drive's free space before and after):
   clusters marked used that no file owns. The file system counts them as used; a tool that adds up
   file sizes counts them as free. `RFs::CheckDisk(_L("D:\\"))` reports it and
   `RFs::ScanDrive(_L("D:\\"))` frees them (both in `efsrv.lib`; `ScanDrive` needs no files open
-  on the drive, else `KErrInUse`). Not run on the phone yet; don't offer it for C: or Z:.
+  on the drive, else `KErrInUse`). `CheckDisk` only reads: on this phone it returned 0 (no
+  errors) for C: in 225 ms and for the 128 MB card in 210 ms, with the browser running (Browser
+  9300 0.68, "Check the phone and the card"). `ScanDrive` changes the drive: not tried, and don't
+  offer it for C:, Z: or a RAM drive.
