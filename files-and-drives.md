@@ -1,7 +1,7 @@
 # Files and drives: where to save, what the drives are
 
-From Browser 9300 0.62-0.65 (11 Nov 2026), on a Nokia 9300. What is measured on the phone and
-what is only the SDK's word is marked.
+From Browser 9300 0.62-0.68 and Maps 9300 0.12-1.60 (its tile caches; Oct-Nov 2026), on a Nokia 9300.
+What is measured on the phone and what is only the SDK's word is marked.
 
 ## The drives
 
@@ -31,6 +31,8 @@ read and deleted; the free RAM and the drive's free space before and after):
   card" on E:; a failed 24 MB download stayed there, and the phone had **1.6 MB of free RAM** left
   (the RAM drive "size" 25 187 KB = 23.5 MB stored + the 1.6 MB free). Never write to E: unless
   you delete it again, and never offer it as a place to save.
+- **E:'s size isn't fixed**: Maps 9300 0.98 saw it as ~14 MB, Browser 9300 as 25 MB with a file on it:
+  it is whatever is stored plus the free RAM, so it changes with every allocation.
 - **E: as a cache:** it is ~10x faster to write and ~20x faster to read than the MMC and survives
   the app's exit (not a power-off), but it costs the same RAM as keeping the data in the app.
   Worth it only for data several apps or several runs reuse; not for textures one app loads into
@@ -71,6 +73,45 @@ read and deleted; the free RAM and the drive's free space before and after):
   enter `\System\` at all. `CDirScan` walks into every folder, so walk with `RFs::GetDir()` and a
   queue of folders instead, and skip `System` at the root. Only delete files your app created:
   keep a list of their paths.
+
+## Many small files (a cache)
+
+Maps 9300 keeps map tiles (10-40 KB each) and 3D files (~30 KB) as one file each, thousands of them.
+Its log gives the averages of real use (the reads and saves in a download thread, while the app draws):
+
+| | Read a file | Save a file |
+|---|---|---|
+| C: (the phone's flash) | 190-640 ms | **1.8-3.6 s** (25-30 KB tiles) |
+| D: (MMC) | 80-140 ms (~390 KB/s for the 3D files) | 370-520 ms |
+
+- **Put a cache on the card.** C: is the slowest place to write on this phone: a save took ~5x as
+  long as on the card, and reads were 2-4x slower too. Measure with your own app before deciding:
+  the card's numbers also depend on the card.
+- **No folder of hundreds of files.** Saving into a folder of ~600 files on C: took ~1.5 s each
+  (0.12): every create and open searches the folder. Spread the files over subfolders by a hash of
+  the name (Maps uses 32: `tiles2\00` .. `1f`).
+- **Don't ask the disk for a file that isn't there.** A miss costs an open that searches a folder
+  (two, if you try two names). Keep an index in RAM: Maps keeps one bit per name hash (8192 words,
+  32 KB) filled from the folders' listings at the start (`RFs::GetDir` with `ESortNone`) and set on
+  every save; a clear bit means "surely not on the disk" and goes straight to the network.
+- **Write a file with one `RFile::Write`**, not in pieces (each write to flash is slow), and don't
+  write files while the app needs the CPU or the link: Maps saves only when no download waits and
+  2 s after the last one was asked (a 4 s save on the card kept the phone from reading the
+  Bluetooth link: its TCP window filled and tiles took 1.5-3.6 s). Queue the saves, and when the
+  queue is full, save the oldest at once rather than dropping it (dropped files are downloaded again
+  next time).
+- **Least recently used without rewriting files:** an LRU cache needs the last use; `RFs::SetModified`
+  on every hit is a write. Maps updates a file's date at most once a day.
+- **Keep room on the drive.** Maps keeps a cache within the drive's free space less a margin (8 MB
+  on C:, where the system and other apps need room; 2 MB on a card), not a fixed size: a fixed 48 MB
+  on a 128 MB card filled it, and a rule "20 MB free at each start" moved a card filled by the cache
+  itself back to C:.
+- **Deleting is cheaper than writing** (Maps' guess for its estimates: ~40 ms a file), but a few
+  thousand files still take minutes: do it as a blocking operation with progress, or bit by bit
+  while idle (Maps cleared its old cache folder a few files at a time between downloads).
+- **`RFs` is per thread.** A download thread needs its own `RFs::Connect()` (or a session shared
+  with `RFs::Share()`); Maps' threads each have one and take turns on the cache with an
+  `RCriticalSection`.
 
 ## Downloads and partial files
 
