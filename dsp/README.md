@@ -441,6 +441,60 @@ What we learned on the way (SPRU374G, SPRU371F):
   before calling the assembly, which then falls back to C).
 - `dbl(Lmem)`: the high word at the even address.
 
+## Why the DSP can't help the 3D view: the display shakes (dspprobe 18-25, Maps 1.60)
+
+Putting the 3D geometry on the DSP worked (38.3 ms, above) but **the screen shook** - scanlines
+shifted sideways, worse while turning. The DSP's SDRAM traffic stalls the LCD's refresh. These probes
+(a DSP node that does DMA on demand, an ARM thread that copies 128 KB over and over as the renderer
+would, a note on the screen for each step) measured exactly what shakes and whether anything an app
+can reach fixes it. All on the Nokia 9300 (OMAP1510).
+
+**What shakes:**
+
+| The DSP's DMA, vs the ARM drawing | Shakes? |
+|---|---|
+| Nothing; short read bursts (<= 256 KB every 0.5 s, ~6 % of the time) | no |
+| Reading SDRAM >= ~16 % of the time (with the ARM) or >= ~30 % (alone) | **yes** |
+| Writing SDRAM, even non-stop (~80 MB/s) | no (the ARM's copies slowed 23 -> 8 MB/s, but no shake) |
+
+Only **reads** shake, and it's the **share of time** reading that matters, not the burst length
+(256 KB bursts with 6 ms gaps shook; shorter bursts at the same duty shook too). The 3D geometry
+reads ~1 MB a frame (~25 % duty) -> it shakes.
+
+**The cause and the (blocked) fix.** The OMAP's traffic controller (TI SPRU673) arbitrates the SDRAM
+(EMIFF) between the MPU, the DSP, the local bus and the system DMA, and the LCD refresh rides the DMA.
+The boot code (disassembled from the ROM at 0x50000398) leaves `EMIFF_PRIO` = 0x100 and **both
+time-out registers (`TIMEOUT1/2`, 0xFFFECC28/2C) at 0** - fixed priority, the LCD refresh last in the
+queue, behind the DSP. A small LCD time-out in `TIMEOUT2` would move it ahead, but:
+
+- The traffic-controller registers are supervisor-only: a user thread reading `0xFFFECC08` (or the
+  kernel's VA `0x580ECC08`) panics KERN-EXEC 3. Reached through the MMU at `0x58000000 + (addr & 0xFFFFF)`.
+- An app can't write them, and **the phone refuses to load a kernel driver we build**: a minimal LDD
+  (UID2 0x100000af, factory writes `TIMEOUT2`) on C: fails `User::LoadLogicalDevice` with
+  **KErrAccessDenied (-21) before the factory runs** (proved: the factory leaves a marker in a buffer -
+  it never ran), every load form. The public S80 SDK can't build a genuine kernel driver (no ARM
+  `edev.lib`/`ekern.lib`, no kernel headers), and EKA1 phones refuse kernel code from a writable drive.
+
+**The one lever an app can reach - and it does nothing.** The DSP's ACPY2 DMA (channel 4, found by
+reading CCR during a transfer: `0x50C0`, enable+priority set) runs at the OMAP system-DMA channel's
+**high** priority (CCR bit 6, port `0xC00 + ch*0x20 + 1`, set from the DSP by `port(*ARn)` - an
+`ioport` pointer reads back 0). Clearing bit 6 (low priority, CCR `0x5000`, confirmed by read-back)
+while the DSP read continuously, with the ARM drawing:
+
+| | CCR | shakes? | ARM bandwidth |
+|---|---|---|---|
+| high priority + ARM | 0x5040 | yes | 13 MB/s |
+| **low priority + ARM** | **0x5000** | **yes** | 13 MB/s |
+
+No difference - same shaking, identical ARM bandwidth. The DSP-vs-LCD contention is resolved at the
+EMIFF between requestor *classes* (the kernel-only time-outs), not within the system-DMA channel
+arbitration where the per-channel priority lives.
+
+**Conclusion:** the DSP can't drive the 3D view on this phone. Its SDRAM reads shake the LCD, the only
+fix is a kernel-only register, and no knob an app or a DSP node can reach changes it. Writes and
+compute-in-DARAM don't shake, so the DSP still suits work that streams through its own RAM by DMA and
+reads little from SDRAM (a video's YUV->RGB), as the earlier probes concluded.
+
 ## Formats (as found)
 
 - **ROM images (XIP)** read as files: `TRomImageHeader` (0x64 bytes) then the code at `iCodeAddress`;
